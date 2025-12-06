@@ -1,1 +1,10 @@
+# ThrottleX 🚦
+A high-performance, pluggable rate-limiting and throttling engine inspired by API gateways like Kong, Envoy, and NGINX.
 
+Supports:
+✔ Token Bucket  
+✔ Sliding Window  
+✔ Per-user / per-IP / per-route  
+✔ MySQL-backed counters  
+✔ Embeddable Middleware for any backend 
+✔ Dockerized Microservice  
