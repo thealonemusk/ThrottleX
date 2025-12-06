@@ -1,12 +1,18 @@
-server:
-  port: 8090
-
 spring:
   datasource:
     url: jdbc:mysql://localhost:3306/throttlex
     username: root
     password: root
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: false
+
+throttlex:
+  mode: service
+  default-policy:
+    type: token-bucket
+    capacity: 100
+    refill-rate: 10
