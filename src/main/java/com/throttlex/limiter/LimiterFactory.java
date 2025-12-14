@@ -1,6 +1,7 @@
 package com.throttlex.limiter;
 
-import com.throttlex.persistence.UsageRecord;
+import com.throttlex.model.UsageRecord;
+import com.throttlex.model.Policy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -9,15 +10,22 @@ import org.springframework.stereotype.Component;
 public class LimiterFactory {
 
     private final TokenBucketLimiter tokenBucketLimiter;
-    private final SlidingWindowLimiter slidingWindowLimiter;
+    // private final SlidingWindowLimiter slidingWindowLimiter;
 
     public boolean allow(String type, UsageRecord record,
-                         int capacity, int refillRate) {
+                         long capacity, long refillRate) {
 
         return switch (type) {
-            case "token-bucket" -> tokenBucketLimiter.allow(record, capacity, refillRate);
-            case "sliding-window" -> slidingWindowLimiter.allow(record.getKeyId(), capacity, refillRate);
-            default -> throw new IllegalArgumentException("Unknown limiter type: " + type);
+            case "token-bucket" -> {
+                Policy policy = Policy.builder()
+                        .type(Policy.PolicyType.TOKEN_BUCKET)
+                        .capacity(capacity)
+                        .refillRate(refillRate)
+                        .build();
+                yield tokenBucketLimiter.allow(record, policy);
+            }
+            // case "sliding-window" -> slidingWindowLimiter.allow(record.getKeyId(), capacity, refillRate);
+            default -> throw new IllegalArgumentException("Unknown or unsupported limiter type: " + type);
         };
     }
 }
