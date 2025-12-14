@@ -1,23 +1,44 @@
 package com.throttlex.limiter;
 
-import com.throttlex.persistence.UsageRecord;
+import com.throttlex.model.Policy;
+import com.throttlex.model.UsageRecord;
 import org.springframework.stereotype.Component;
 
 @Component
-public class TokenBucketLimiter {
+public class TokenBucketLimiter implements Limiter {
 
-    public boolean allow(UsageRecord entity, int capacity, int refillRatePerSec) {
+    @Override
+    public boolean allow(UsageRecord record, Policy policy) {
         long now = System.currentTimeMillis();
-        long elapsedSec = (now - entity.getLastRefill()) / 1000;
+        long lastRefill = record.getLastRefill();
+        long capacity = policy.getCapacity();
+        long refillRate = policy.getRefillRate();
+        
+        // 1. Calculate tokens to add
+        // Time elapsed in seconds
+        long elapsedMillis = now - lastRefill;
+        // Avoid refill if barely any time passed to prevent partial token precision issues
+        // (Though double math or staying in millis/micros would be better for high precision)
+        // For simplicity: (elapsed / 1000.0) * rate
+        
+        long tokensToAdd = (long) (elapsedMillis / 1000.0 * refillRate);
+        
+        // 2. Refill
+        long currentTokens = record.getTokens();
+        if (tokensToAdd > 0) {
+            currentTokens = Math.min(capacity, currentTokens + tokensToAdd);
+            // Drift-safe approach: update lastRefill based on tokens actually added
+            long newLastRefill = lastRefill + (tokensToAdd * 1000L) / refillRate;
+            record.setLastRefill(newLastRefill);
+        }
 
-        long newTokens = Math.min(capacity, entity.getTokens() + (elapsedSec * refillRatePerSec));
-        entity.setTokens(newTokens);
-        entity.setLastRefill(now);
-
-        if (newTokens > 0) {
-            entity.setTokens(newTokens - 1);
+        // 3. Consume
+        if (currentTokens >= 1) {
+            currentTokens--;
+            record.setTokens(currentTokens);
             return true;
         }
+
         return false;
     }
 }

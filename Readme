@@ -8,3 +8,20 @@ Supports:
 ✔ MySQL-backed counters  
 ✔ Embeddable Middleware for any backend 
 ✔ Dockerized Microservice  
+
+## Implementation Phases
+- **Phase 1: Foundation & Token Bucket**
+    - Project setup (Spring Boot).
+    - `UsageRecord` and `Policy` models.
+    - `TokenBucketLimiter` logic (In-memory/Mock).
+- **Phase 2: MySQL Persistence & Sliding Window**
+    - Integrate MySQL.
+    - Implement `SlidingWindowLimiter`.
+    - Persist usage/buckets.
+- **Phase 3: Filter & Admin API**
+    - `ThrottleXFilter` implementation.
+    - Admin REST APIs.
+- **Phase 4: Production Readiness**
+    - Dockerization.
+    - Load Testing.
+    - Documentation.

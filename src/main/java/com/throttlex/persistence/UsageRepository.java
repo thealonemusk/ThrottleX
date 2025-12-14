@@ -1,5 +1,6 @@
 package com.throttlex.persistence;
 
+import com.throttlex.model.UsageRecord;
 import org.springframework.data.jpa.repository.*;
 import org.springframework.stereotype.Repository;
 import jakarta.persistence.LockModeType;

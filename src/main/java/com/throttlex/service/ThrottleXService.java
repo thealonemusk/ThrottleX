@@ -1,7 +1,8 @@
 package com.throttlex.service;
 
 import com.throttlex.limiter.LimiterFactory;
-import com.throttlex.persistence.*;
+import com.throttlex.persistence.UsageRepository;
+import com.throttlex.model.UsageRecord;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
