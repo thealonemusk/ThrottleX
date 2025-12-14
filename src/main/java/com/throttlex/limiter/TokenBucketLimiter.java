@@ -27,13 +27,9 @@ public class TokenBucketLimiter implements Limiter {
         long currentTokens = record.getTokens();
         if (tokensToAdd > 0) {
             currentTokens = Math.min(capacity, currentTokens + tokensToAdd);
-            record.setLastRefill(now); // Update refill time only if we added tokens? 
-            // Better: update refill time based on how many "ticks" passed to avoid time drift?
-            // Simple approach: Set to now.
-            // Drift-safe approach: lastRefill += tokensToAdd / rate * 1000
-            
-            // Let's stick to simple "set to now" for Phase 1, but be aware of drift.
-            record.setLastRefill(now);
+            // Drift-safe approach: update lastRefill based on tokens actually added
+            long newLastRefill = lastRefill + (tokensToAdd * 1000L) / refillRate;
+            record.setLastRefill(newLastRefill);
         }
 
         // 3. Consume
