@@ -6,7 +6,7 @@ services:
     container_name: throttlex-mysql
     restart: always
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_PASSWORD: password
       MYSQL_DATABASE: throttlex
     ports:
       - "3306:3306"
