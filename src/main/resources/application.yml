@@ -4,7 +4,7 @@ spring:
   datasource:
     url: jdbc:mysql://localhost:3306/throttlex?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true
     username: root
-    password: password
+    password: root
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 20
@@ -16,7 +16,7 @@ spring:
     show-sql: false
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.MySQLDialect
+        dialect: org.hibernate.dialect.MySQL8Dialect
         format_sql: false
 
 # Actuator - expose health endpoint
