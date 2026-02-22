@@ -1,18 +1,16 @@
 package com.throttlex.model;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
-import jakarta.persistence.Column;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
+import jakarta.persistence.*;
+import lombok.*;
 
 @Entity
-@Table(name = "throttlex_usage")
+@Table(
+    name = "throttlex_usage",
+    indexes = {
+        @Index(name = "idx_usage_key_id", columnList = "key_id", unique = true),
+        @Index(name = "idx_usage_last_refill", columnList = "last_refill")
+    }
+)
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

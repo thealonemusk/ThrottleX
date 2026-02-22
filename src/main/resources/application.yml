@@ -6,14 +6,31 @@ spring:
     username: root
     password: password
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
   jpa:
     hibernate:
       ddl-auto: update
+    show-sql: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
-        format_sql: true
+        format_sql: false
 
-# Custom ThrottleX Config
+# Actuator - expose health endpoint
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+# Custom ThrottleX defaults (used when no per-key policy is configured)
 throttlex:
-  mode: service # or embedded
+  default-capacity: 100
+  default-refill-rate: 10
+  default-window-seconds: 60
