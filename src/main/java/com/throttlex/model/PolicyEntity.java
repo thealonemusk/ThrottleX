@@ -1,7 +1,8 @@
 package com.throttlex.model;
 
-import jakarta.persistence.*;
+import javax.persistence.*;
 import lombok.*;
+
 
 @Entity
 @Table(

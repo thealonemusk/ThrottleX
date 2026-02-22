@@ -4,7 +4,8 @@ import com.throttlex.model.UsageRecord;
 import org.springframework.data.jpa.repository.*;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-import jakarta.persistence.LockModeType;
+import javax.persistence.LockModeType;
+
 
 import java.util.Optional;
 

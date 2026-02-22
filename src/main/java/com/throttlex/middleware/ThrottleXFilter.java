@@ -1,8 +1,9 @@
 package com.throttlex.middleware;
 
 import com.throttlex.service.ThrottleXService;
-import jakarta.servlet.*;
-import jakarta.servlet.http.*;
+import javax.servlet.*;
+import javax.servlet.http.*;
+
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import java.io.IOException;

@@ -13,11 +13,14 @@ public class LimiterFactory {
     private final SlidingWindowLimiter slidingWindowLimiter;
 
     public boolean allow(String type, UsageRecord record, Policy policy) {
-        return switch (type.toLowerCase()) {
-            case "token-bucket", "token_bucket" -> tokenBucketLimiter.allow(record, policy);
-            case "sliding-window", "sliding_window" -> slidingWindowLimiter.allow(record, policy);
-            default -> throw new IllegalArgumentException("Unknown limiter type: " + type
-                    + ". Supported types: token-bucket, sliding-window");
-        };
+        String t = type.toLowerCase().replace("_", "-");
+        if ("token-bucket".equals(t)) {
+            return tokenBucketLimiter.allow(record, policy);
+        } else if ("sliding-window".equals(t)) {
+            return slidingWindowLimiter.allow(record, policy);
+        } else {
+            throw new IllegalArgumentException(
+                "Unknown limiter type: " + type + ". Supported: token-bucket, sliding-window");
+        }
     }
 }
