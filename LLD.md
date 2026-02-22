@@ -93,81 +93,138 @@ boolean checkAndConsume(String key, Policy policy);
 
 #### SlidingWindowLimiter
 
-* Two design options:
-  1. **MySQL-based approximate sliding window** — store time-bucketed counters (e.g., 1-sec buckets) in a `usage_buckets` table and query SUM last N seconds. More storage but relational-friendly.
-  2. **Redis** + sorted-set TTL approach (preferred for accuracy/perf): store timestamps in a sorted-set and remove older entries via ZREMRANGEBYSCORE + ZCARD atomic pair. Use Lua to make atomic.
+**Implemented design: MySQL request-log table**
 
-**MySQL approach details:**
-
-* Table `usage_buckets(keyId, bucket_ts, count)` (bucket_ts = epoch seconds).
-* On request: increment bucket row `ON DUPLICATE KEY UPDATE count = count + 1`, then SELECT SUM(count) for last `windowSeconds`.
-* Use `AUTO_INCREMENT` primary key or composite PK `(keyId, bucket_ts)` for fast `INSERT ... ON DUPLICATE KEY`.
+* Table `throttlex_sw_log(id, key_id, request_time)` stores one row per allowed request.
+* On each request:
+  1. Delete expired rows: `DELETE WHERE key_id = ? AND request_time < now - windowMs` (keeps table lean).
+  2. Count rows in window: `SELECT COUNT(*) WHERE key_id = ? AND request_time >= windowStart`.
+  3. If count >= capacity → deny.
+  4. Else insert a new row and return allowed.
+* Composite index on `(key_id, request_time)` makes count and delete queries O(log n).
+* All three steps run inside a single `@Transactional` method.
 
 ### 2.4 Persistence Layer (MySQL)
 
-**Tables:**
+**Tables (actually implemented):**
 
-1. `throttlex_usage` — token-bucket state
-2. `throttlex_buckets` — sliding-window counters (if using MySQL)
-3. `throttlex_policies` — optional per-route/user policies
+1. `throttlex_usage` — token-bucket state (`key_id`, `tokens`, `last_refill`)
+2. `throttlex_sw_log` — sliding-window request log (`key_id`, `request_time`)
+3. `throttlex_policy` — per-key algorithm / capacity config
 
 **throttlex_usage (DDL)**
 
 ```sql
 CREATE TABLE throttlex_usage (
-  id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  key_id VARCHAR(255) NOT NULL,
-  tokens BIGINT NOT NULL,
-  last_refill BIGINT NOT NULL,
-  CONSTRAINT uq_key UNIQUE (key_id)
+  id          BIGINT AUTO_INCREMENT PRIMARY KEY,
+  key_id      VARCHAR(255) NOT NULL,
+  tokens      BIGINT       NOT NULL,
+  last_refill BIGINT       NOT NULL,
+  UNIQUE INDEX idx_usage_key_id    (key_id),
+         INDEX idx_usage_last_refill (last_refill)
 ) ENGINE=InnoDB;
 ```
 
-**throttlex_buckets (DDL)**
+**throttlex_sw_log (DDL)**
 
 ```sql
-CREATE TABLE throttlex_buckets (
-  key_id VARCHAR(255) NOT NULL,
-  bucket_ts BIGINT NOT NULL,
-  count INT NOT NULL,
-  PRIMARY KEY (key_id, bucket_ts)
+CREATE TABLE throttlex_sw_log (
+  id           BIGINT AUTO_INCREMENT PRIMARY KEY,
+  key_id       VARCHAR(255) NOT NULL,
+  request_time BIGINT       NOT NULL,
+  INDEX idx_sw_key_time (key_id, request_time)
 ) ENGINE=InnoDB;
 ```
 
-**Indexes:** unique index on `key_id` for `usage`, composite PK for buckets.
+**throttlex_policy (DDL)**
+
+```sql
+CREATE TABLE throttlex_policy (
+  id             BIGINT AUTO_INCREMENT PRIMARY KEY,
+  policy_key     VARCHAR(255) NOT NULL,
+  type           VARCHAR(50)  NOT NULL,  -- TOKEN_BUCKET | SLIDING_WINDOW
+  capacity       BIGINT       NOT NULL,
+  refill_rate    BIGINT       NOT NULL,
+  window_seconds BIGINT       NOT NULL,
+  UNIQUE INDEX idx_policy_key (policy_key)
+) ENGINE=InnoDB;
+```
 
 ### 2.5 Admin APIs
 
-* `GET /admin/status` — health
-* `GET /admin/policy/{key}` — show effective policy
-* `POST /admin/policy` — add/update policy
-* `GET /admin/usage/{key}` — return current tokens, lastRefill, recent buckets
+| Method | Path | Description |
+|---|---|---|
+| GET | `/admin/status` | Service health + version |
+| GET | `/admin/metrics` | All-key usage stats |
+| GET | `/admin/metrics/{key}` | Per-key token/window metrics |
+| POST | `/admin/reset/{key}` | Reset counters for a key |
+| GET | `/admin/policies` | List all configured policies |
+| GET | `/admin/policies/{key}` | Get policy by key |
+| POST | `/admin/policies` | Create a new rate-limit policy |
+| PUT | `/admin/policies/{key}` | Update existing policy |
+| DELETE | `/admin/policies/{key}` | Delete a policy |
 
-**Auth:** admin endpoints should be protected via API key or OAuth; enforce IP allowlist.
+All error responses follow a standardized schema: `{ status, error, message, timestamp }`.
+
+**Auth:** admin endpoints should be protected via API key or OAuth; enforce IP allowlist (future work).
 
 ---
 
 ## 3. Data Model (Detailed)
 
-**UsageRecord Java class**
+**UsageRecord** (`throttlex_usage`) — token-bucket live state
 
 ```java
+@Entity @Table(name = "throttlex_usage", indexes = {
+  @Index(name = "idx_usage_key_id",     columnList = "key_id",     unique = true),
+  @Index(name = "idx_usage_last_refill", columnList = "last_refill")
+})
 public class UsageRecord {
-  private Long id;
+  private Long   id;
   private String keyId;
-  private long tokens;        // remaining tokens
-  private long lastRefill;    // epoch millis
+  private long   tokens;     // remaining tokens
+  private long   lastRefill; // epoch millis
 }
 ```
 
-**Policy model (Java)**
+**SlidingWindowRecord** (`throttlex_sw_log`) — one row per allowed request
+
+```java
+@Entity @Table(name = "throttlex_sw_log", indexes = {
+  @Index(name = "idx_sw_key_time", columnList = "key_id, request_time")
+})
+public class SlidingWindowRecord {
+  private Long   id;
+  private String keyId;
+  private long   requestTime; // epoch millis
+}
+```
+
+**PolicyEntity** (`throttlex_policy`) — persisted rate-limit configuration
+
+```java
+@Entity @Table(name = "throttlex_policy", indexes = {
+  @Index(name = "idx_policy_key", columnList = "policy_key", unique = true)
+})
+public class PolicyEntity {
+  private Long            id;
+  private String          policyKey;
+  private Policy.PolicyType type;      // TOKEN_BUCKET | SLIDING_WINDOW
+  private long            capacity;
+  private long            refillRate;    // tokens/sec (token-bucket)
+  private long            windowSeconds; // window size (sliding-window)
+}
+```
+
+**Policy** (domain object, not persisted) — passed to limiters
 
 ```java
 public class Policy {
-  String type; // "token-bucket" | "sliding-window"
-  int capacity;
-  int refillRate;
-  int windowSeconds; // for sliding
+  private String          key;
+  private PolicyType      type;
+  private long            capacity;
+  private long            refillRate;
+  private long            windowSeconds;
 }
 ```
 
@@ -177,21 +234,31 @@ public class Policy {
 
 ### Runtime (applied per incoming request)
 
-* Authenticated request header lookup order: `X-API-Key`, `Authorization`, `X-User-Id`.
-* Route derived as `HTTP_METHOD + path_template` (e.g., `GET /v1/pay`).
+* Key extraction order: `X-Forwarded-For` header → `request.getRemoteAddr()`.
+* Policy lookup: `PolicyRepository.findByPolicyKey(key)` → fall back to defaults (`capacity=100`, `refillRate=10`, `windowSeconds=60`, `TOKEN_BUCKET`).
 
-### Admin APIs (JSON)
+### Admin APIs — Request / Response Examples
 
-**POST /admin/policy**
+**POST /admin/policies** (create)
 
 ```json
-{ "key": "route:/v1/pay", "type": "token-bucket", "capacity": 100, "refillRate": 10 }
+// Request
+{ "key": "user-123", "type": "TOKEN_BUCKET", "capacity": 100, "refillRate": 10, "windowSeconds": 60 }
+// Response 201
+{ "id": 1, "policyKey": "user-123", "type": "TOKEN_BUCKET", "capacity": 100, "refillRate": 10, "windowSeconds": 60 }
 ```
 
-**GET /admin/usage/{key}** returns:
+**GET /admin/metrics/{key}** returns:
 
 ```json
-{ "key": "user:123", "tokens": 42, "lastRefill": 1690000000000 }
+{ "key": "user-123", "algorithm": "TOKEN_BUCKET", "currentTokens": 87, "capacity": 100,
+  "windowRequestCount": 13, "windowSeconds": 60, "status": "OK" }
+```
+
+**Error response (all errors)**:
+
+```json
+{ "status": 429, "error": "Too Many Requests", "message": "Rate limit exceeded for key: user-123", "timestamp": "2026-02-22T06:55:00Z" }
 ```
 
 ---
@@ -211,14 +278,16 @@ This guarantees linearizability per key.
 
 **Optimization:** Avoid locking when short-circuit possible (e.g., tokens are full and refill timestamp unchanged) — risky; prefer correctness initially.
 
-### Sliding Window (MySQL)
+### Sliding Window (MySQL — implemented)
 
-* Use `INSERT ... ON DUPLICATE KEY UPDATE` for bucket increments — this is atomic.
-* After increment, `SELECT SUM(count)` for window; if count > limit → deny and optionally revert increment (or leave and apply penalty). Better: check then increment within a transaction.
+* All three steps (delete expired → count → insert) execute inside a single `@Transactional` method.
+* `deleteExpired` runs first so the count query only scans live rows.
+* The composite index `(key_id, request_time)` in `throttlex_sw_log` makes DELETE + COUNT efficient.
+* Check-before-insert prevents over-counting: count is read before inserting the new row.
 
-**Redis variant** (recommended for production):
+**Redis variant** (future upgrade path):
 
-* Use a Lua script that performs ZREMRANGEBYSCORE + ZADD + ZCARD and returns ZCARD. Atomic in Redis.
+* Lua script: ZREMRANGEBYSCORE + ZADD + ZCARD — fully atomic in Redis, better for ultra-low latency.
 
 ---
 
@@ -281,26 +350,59 @@ Optional: run ThrottleX as a sidecar to services for per-service isolation.
 
 ---
 
-# Appendix: Important Code Snippets (pseudocode)
+# Appendix: Key Code Snippets (actual implementation)
 
-**TokenBucket (transactional)**
+**ThrottleXService.check() — policy resolution + routing**
 
 ```java
 @Transactional
-public boolean checkAndConsume(String key) {
-  UsageRecord u = repo.findByKeyIdForUpdate(key).orElse(createDefault(key));
-  if (tokenBucket.allow(u, capacity, refill)) {
-    repo.save(u);
-    return true;
-  }
-  return false;
+public boolean check(String key) {
+    Policy policy = policyRepository.findByPolicyKey(key)
+            .map(policyService::toPolicy)
+            .orElseGet(() -> Policy.builder()
+                    .type(Policy.PolicyType.TOKEN_BUCKET)
+                    .capacity(100).refillRate(10).windowSeconds(60).build());
+
+    UsageRecord record = usageRepository.findByKeyId(key)
+            .orElseGet(() -> createAndSave(key, policy));
+
+    boolean allowed = limiterFactory.allow(policy.getType().name(), record, policy);
+    usageRepository.save(record);
+    return allowed;
 }
 ```
 
-**Redis Sliding Window (Lua)**
+**SlidingWindowLimiter.allow() — MySQL log approach**
+
+```java
+@Transactional
+public boolean allow(UsageRecord record, Policy policy) {
+    long now = System.currentTimeMillis();
+    long windowStart = now - policy.getWindowSeconds() * 1000L;
+
+    slidingWindowRepository.deleteExpired(record.getKeyId(), windowStart);
+    long count = slidingWindowRepository.countRequestsInWindow(record.getKeyId(), windowStart);
+
+    if (count >= policy.getCapacity()) return false;
+
+    slidingWindowRepository.save(SlidingWindowRecord.builder()
+            .keyId(record.getKeyId()).requestTime(now).build());
+    return true;
+}
+```
+
+**UsageRepository — atomic decrement**
+
+```java
+@Modifying
+@Query("UPDATE UsageRecord r SET r.tokens = r.tokens - 1 WHERE r.keyId = :keyId AND r.tokens > 0")
+int decrementToken(@Param("keyId") String keyId);
+```
+
+**Redis Sliding Window (future upgrade — Lua)**
 
 ```lua
--- KEYS[1] = key, ARGV[1]=now, ARGV[2]=windowSec, ARGV[3]=max
+-- KEYS[1]=key, ARGV[1]=now, ARGV[2]=windowSec, ARGV[3]=max
 redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, ARGV[1]-ARGV[2])
 redis.call('ZADD', KEYS[1], ARGV[1], ARGV[1])
 local cnt = redis.call('ZCARD', KEYS[1])
